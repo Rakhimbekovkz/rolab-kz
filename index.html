@@ -328,37 +328,91 @@ footer{text-align:center;font-size:12.5px;color:var(--muted);display:grid;gap:4p
 var CONFIG={
   phone:"77088880355",
   promoEnd:"2026-11-30T23:59:59+05:00", // после этой даты плашка акции скрывается сама
-  source:"Instagram (ссылка в шапке)"
+  // Адрес веб-приложения Google Apps Script (таблица аналитики). Пусто = статистика не отправляется.
+  trackUrl:""
 };
+
+/* ===== Аналитика: что делал человек на странице ===== */
+var T=(function(){
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+  function rid(n){var a="ABCDEFGHJKLMNPQRSTUVWXYZ23456789",s="";for(var i=0;i<n;i++)s+=a.charAt(Math.floor(Math.random()*a.length));return s}
+  var vid=store("rl_vid");if(!vid){vid=rid(10);store("rl_vid",vid)}
+  var sid=rid(10);
+  var qs=new URLSearchParams(location.search);
+  var ua=navigator.userAgent||"";
+  // Источник: ?src=bio / stories / dm ... иначе угадываем по переходу
+  var src=(qs.get("src")||qs.get("utm_source")||"").toLowerCase().slice(0,30);
+  if(!src)src=/Instagram/i.test(ua)||/instagram/i.test(document.referrer)?"instagram":(document.referrer?"другой сайт":"прямой заход");
+  var dev=/iPhone|iPad|iPod/i.test(ua)?"iPhone":/Android/i.test(ua)?"Android":"Компьютер";
+  var inapp=/Instagram/i.test(ua)?"да":"нет";
+  function send(ev,label,extra){
+    if(!CONFIG.trackUrl)return;
+    var d={ev:ev,label:label||"",vid:vid,sid:sid,src:src,dev:dev,inapp:inapp};
+    if(extra)for(var k in extra)d[k]=extra[k];
+    var body=JSON.stringify(d);
+    try{
+      if(navigator.sendBeacon&&navigator.sendBeacon(CONFIG.trackUrl,new Blob([body],{type:"text/plain;charset=utf-8"})))return;
+    }catch(e){}
+    try{fetch(CONFIG.trackUrl,{method:"POST",mode:"no-cors",keepalive:true,headers:{"Content-Type":"text/plain;charset=utf-8"},body:body})}catch(e){}
+  }
+  return {send:send,code:function(){return "IG-"+rid(4)}};
+})();
+
 (function(){
   var promoOn=Date.now()<new Date(CONFIG.promoEnd).getTime();
   var gift=promoOn?" Хочу успеть на подарок с принтером.":"";
+  var base="Здравствуйте! Хочу записать ребёнка на бесплатный пробный урок по робототехнике.";
   var texts={
-    hero:"Здравствуйте! Хочу записать ребёнка на бесплатный пробный урок по робототехнике."+gift,
-    sticky:"Здравствуйте! Хочу записать ребёнка на бесплатный пробный урок по робототехнике."+gift,
-    final:"Здравствуйте! Хочу записать ребёнка на бесплатный пробный урок по робототехнике."+gift,
+    hero:base+gift, sticky:base+gift, final:base+gift,
     price:"Здравствуйте! Подскажите, пожалуйста, стоимость курса робототехники и условия рассрочки Kaspi."
   };
   function val(n){var e=document.querySelector('input[name="'+n+'"]:checked');return e?e.value:""}
-  function quizText(){
-    var p=["Здравствуйте! Хочу записать ребёнка на бесплатный пробный урок по робототехнике."];
-    var g=val("grade"),o=val("goal"),x=val("exp"),c=(document.getElementById("city").value||"").trim();
-    if(g)p.push("Класс: "+g+".");
-    if(o)p.push("Главное для нас: "+o+".");
-    if(x)p.push("Опыт: "+x+".");
-    if(c)p.push("Город: "+c+".");
+  function quiz(){return {grade:val("grade"),goal:val("goal"),exp:val("exp"),city:(document.getElementById("city").value||"").trim().slice(0,40)}}
+  function quizText(q){
+    var p=[base];
+    if(q.grade)p.push("Класс: "+q.grade+".");
+    if(q.goal)p.push("Главное для нас: "+q.goal+".");
+    if(q.exp)p.push("Опыт: "+q.exp+".");
+    if(q.city)p.push("Город: "+q.city+".");
     return p.join(" ")+gift;
   }
-  function link(t){return "https://wa.me/"+CONFIG.phone+"?text="+encodeURIComponent(t+"\n\n("+CONFIG.source+")")}
+  // Код заявки в конце сообщения: по нему менеджер отмечает заявку, а таблица понимает, с какой кнопки она пришла
+  function link(t,code){return "https://wa.me/"+CONFIG.phone+"?text="+encodeURIComponent(t+"\n\n(Заявка с сайта · "+code+")")}
+
   document.querySelectorAll("[data-wa]").forEach(function(a){
     var k=a.getAttribute("data-wa");
     a.setAttribute("target","_blank");a.setAttribute("rel","noopener");
-    if(k!=="quiz")a.href=link(texts[k]);
+    var code=T.code();
+    if(k!=="quiz")a.href=link(texts[k],code);
     a.addEventListener("click",function(){
-      if(k==="quiz")a.href=link(quizText());
+      var q=k==="quiz"?quiz():{};
+      if(k==="quiz")a.href=link(quizText(q),code);
+      T.send("wa_click",k,{code:code,grade:q.grade||"",goal:q.goal||"",exp:q.exp||"",city:q.city||""});
       if(window.fbq)try{fbq("track","Contact",{content_name:k})}catch(e){}
+      // новый код для следующего нажатия той же кнопки
+      setTimeout(function(){code=T.code();if(k!=="quiz")a.href=link(texts[k],code)},500);
     });
   });
+
+  // Визит, дочитывание, квиз, вопросы, время на странице
+  T.send("visit");
+  var s50=false,s90=false;
+  window.addEventListener("scroll",function(){
+    var h=document.documentElement,p=(h.scrollTop+innerHeight)/h.scrollHeight;
+    if(!s50&&p>=0.5){s50=true;T.send("scroll50")}
+    if(!s90&&p>=0.9){s90=true;T.send("scroll90")}
+  },{passive:true});
+  var qs=false;
+  document.getElementById("quiz").addEventListener("change",function(){if(!qs){qs=true;T.send("quiz_start")}});
+  document.querySelectorAll("details").forEach(function(d){
+    d.addEventListener("toggle",function(){if(d.open)T.send("faq",(d.querySelector("summary").textContent||"").slice(0,60))});
+  });
+  var shown=Date.now(),total=0;
+  document.addEventListener("visibilitychange",function(){
+    if(document.visibilityState==="hidden"){total+=Date.now()-shown;T.send("leave","",{sec:Math.round(total/1000)})}
+    else shown=Date.now();
+  });
+
   if(promoOn){
     var box=document.getElementById("promo");box.hidden=false;
     var end=new Date(CONFIG.promoEnd).getTime();
